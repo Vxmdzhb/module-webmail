@@ -2,7 +2,7 @@
 
 declare(strict_types = 1);
 
-namespace AstrX\Mail\Diagnostic;
+namespace AstrX\Webmail\Diagnostic;
 
 use AstrX\Result\AbstractDiagnostic;
 use AstrX\Result\DiagnosticLevel;
