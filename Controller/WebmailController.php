@@ -662,7 +662,9 @@ final class WebmailController extends AbstractController
         $this->ctx->set('compose_subject',        $composeSubject);
         $this->ctx->set('compose_body',           $composeBody);
         $this->ctx->set('compose_in_reply_to',    $inReplyTo);
-        $this->ctx->set('user_mailbox',           $this->session->mailbox());
+        // The address the message will be sent from, exactly as sendMessage() builds it.
+        $localPart = $this->webmail->resolveLocalPart($this->session->mailbox(), $this->session->username());
+        $this->ctx->set('user_mailbox',           $this->session->username() . ' <' . $localPart . '@' . $this->webmail->mailDomain() . '>');
         $this->ctx->set('back_url',               $selfUrl . '?' . http_build_query(['folder' => $folder]));
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
