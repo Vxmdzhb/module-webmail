@@ -2,6 +2,8 @@
 
 In-browser IMAP/SMTP webmail client — the **Webmail** module of [AstrX](https://github.com/Vxmdzhb/astrx).
 
+![The webmail inbox](docs/screenshot.png)
+
 - Module key: `webmail` (switch it on in the site's `resources/config/Modules.config.php`)
 - Pages: `admin_config_webmail`, `webmail`
 - Requires: `astrx/cms`, `astrx/framework`, `astrx/library`
