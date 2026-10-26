@@ -94,7 +94,7 @@ final class HtmlEmailSanitizer
             }
         }
 
-        // ── 1b. Strip comment and processing-instruction nodes (R11 HIGH) ────
+        // ── 1b. Strip comment and processing-instruction nodes ────
         // libxml parses "<!--><img src=x onerror=...>-->" as a SINGLE comment
         // node, and the allowlist walk below descends only into DOMElement — so
         // an <img> hidden inside a comment is never seen by the walker and is
@@ -276,10 +276,10 @@ final class HtmlEmailSanitizer
     }
 
     /**
-     * Normalise a URL for scheme testing the way a browser does: strip ASCII
-     * whitespace and control characters (\t \n \r \f \v \0 and space) that are
-     * ignored when resolving the scheme, then lowercase. Only used to classify
-     * the scheme — the stored attribute value is left untouched.
+     * Normalise a URL for scheme testing the way a browser does: strip the ASCII
+     * whitespace and control characters (\t \n \r \f \v \0 and space) that
+     * browsers ignore there, then lowercase. Only used to classify the scheme;
+     * the stored value is left as it is.
      */
     private function normaliseForScheme(string $url): string
     {

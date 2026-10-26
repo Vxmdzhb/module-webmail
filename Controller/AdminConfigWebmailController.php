@@ -25,25 +25,18 @@ use AstrX\Kernel\AbstractController;
 use AstrX\Admin\AdminPermission;
 
 /**
- * Admin — Webmail / IMAP configuration editor.
+ * Admin: webmail and IMAP settings.
+ *
  * Two sections on one page:
- *   imap     — ImapClient settings (host, port, encryption, timeout, socks5)
- *   folders  — WebmailService folder names (trash, sent, drafts) + per-page count
+ *   imap     ImapClient settings (host, port, encryption, timeout, SOCKS5)
+ *   folders  WebmailService folder names (trash, sent, drafts) and page size
  *
- * Both sections live in Mail.config.php — that is what `AstrX\Mail\ImapClient`
- * and `AstrX\Webmail\WebmailService` are configured from (ModuleLoader resolves the
- * section from the class short name, and reaches the file through the
- * parent-namespace fallback). This editor used to write `Imap.config.php`
- * instead: a file no code path loads. Saving reported success and wrote an audit
- * row while ImapClient kept its previous settings — so an operator who set
- * imap_socks5_host/imap_socks5_port to point IMAP at Tor got a "saved" flash and
- * a client that still connected to the IMAP server directly, off-Tor.
- *
- * The #[ConfigDomain] attributes below are the single declaration of that
- * section→file pairing: this controller derives its write target from them
- * ({@see domainFile()}), ConfigWriter independently routes each section to the
- * file that declares it, and tools/check_config.php fails CI if the declaration
- * and the on-disk layout ever diverge.
+ * Both live in Mail.config.php, which is where `AstrX\Mail\ImapClient` and
+ * `AstrX\Webmail\WebmailService` are configured from. The #[ConfigDomain]
+ * attributes below declare that pairing once: this controller derives its
+ * write target from them ({@see domainFile()}), ConfigWriter routes each
+ * section to the file that declares it, and tools/check_config.php fails CI
+ * if the declaration and the files ever disagree.
  */
 #[ConfigDomain('ImapClient', file: 'Mail')]
 #[ConfigDomain('WebmailService', file: 'Mail')]

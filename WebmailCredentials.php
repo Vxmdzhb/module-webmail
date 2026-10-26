@@ -22,8 +22,8 @@ final class WebmailCredentials
 
     public function __construct(private readonly UserSession $session)
     {
-        // A session from before the upgrade may still hold the old copy; it is
-        // no longer read, and nothing else would ever clear it.
+        // Sessions from older versions may still hold a copy here. It is no longer
+        // read, so clear it.
         foreach (self::LEGACY_KEYS as $key) {
             unset($_SESSION[$key]);
         }

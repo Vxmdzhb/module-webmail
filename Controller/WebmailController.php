@@ -184,7 +184,7 @@ final class WebmailController extends AbstractController
         // session-bound CSRF token is available), so this POST must carry CSRF
         // like every other webmail action — otherwise a cross-site POST could
         // plant an attacker-controlled IMAP password into the victim's webmail
-        // session (login CSRF), R3-20.
+        // session (login CSRF).
         if ($action === 'imap_login') {
             $csrfResult = $this->csrf->verify(self::FORM, self::mStr($posted, '_csrf', ''));
             if (!$csrfResult->isOk()) {
@@ -419,7 +419,7 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_imap_error',    $imapError);
         $this->ctx->set('prg_id',                $this->prg->createId($selfUrl));
         $this->ctx->set('base_url',              $selfUrl);
-        // CSRF token for the IMAP-login form (R3-20). The user already holds a
+        // CSRF token for the IMAP-login form. The user already holds a
         // site session here, so a session-bound token is available pre-IMAP-auth.
         $this->ctx->set('csrf_token',            $this->csrf->generate(self::FORM));
         $this->setI18n();

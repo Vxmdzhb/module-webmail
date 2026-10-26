@@ -324,14 +324,14 @@ final class WebmailService
             ? $fromAddress . '@' . $this->mailDomain
             : $fromAddress;
 
-        // Header/command injection guard (H2). Mailer re-validates the SMTP
+        // Header/command injection guard. Mailer re-validates the SMTP
         // envelope, but cc/bcc/reply-to/in-reply-to only reach the raw IMAP
         // APPEND copy — guard every header field here before either path runs.
         if (($bad = $this->guardHeaders($resolvedFrom, $fromName, $toAddress, $subject, $cc, $bcc, $inReplyTo, $replyTo)) !== null) {
             return $bad;
         }
 
-        // Send via SMTP, now including Cc/Bcc in the envelope + Cc header (F-07).
+        // Send via SMTP, now including Cc/Bcc in the envelope + Cc header.
         $r = $this->mailer->send($toAddress, '', $subject, $bodyText, $bodyHtml, $resolvedFrom, $fromName, $priority, $readReceipt, [], $cc, $bcc);
         if (!$r->isOk()) { return $r; }
 

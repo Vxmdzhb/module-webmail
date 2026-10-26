@@ -7,14 +7,12 @@ use AstrX\User\LoginListener;
 
 /**
  * When the mail server shares the site's accounts (mailserver_is_local), the
- * login password IS the IMAP password: keep it in the AES-encrypted session so
- * the webmail page can connect without asking for it again. Kept across a
- * second-factor step too; if that step fails the session discards it.
+ * login password is the IMAP password: keep it in the encrypted session so
+ * the webmail page can connect without asking again. It survives a second
+ * factor step; if that step fails, the session drops it.
  *
- * Otherwise nothing is kept. The /login form used to store the site password
- * unconditionally, so with a remote mail server the first webmail visit tried
- * it against IMAP, failed, and showed a wrong-password error before asking for
- * the real one — and the cleartext password sat in the session for nothing.
+ * Otherwise nothing is kept: the site password would only be tried against a
+ * mail server it doesn't belong to.
  */
 final class WebmailLoginListener implements LoginListener
 {
