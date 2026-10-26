@@ -476,8 +476,8 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_view_headers',   false);
         $this->ctx->set('folders',                $folders);
         $this->ctx->set('current_folder',         $folder);
-        $this->ctx->set('messages',               $this->decorateMessages($list['messages'], $folder, $selfUrl));
-        $this->ctx->set('has_messages',           $list['messages'] !== []);
+        $this->ctx->set('mail_list',              $this->decorateMessages($list['messages'], $folder, $selfUrl));
+        $this->ctx->set('has_mail_list',          $list['messages'] !== []);
         $this->ctx->set('msg_total',              $list['total']);
         $this->ctx->set('msg_pages',              $list['pages']);
         $this->ctx->set('msg_page',               $list['page']);

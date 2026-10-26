@@ -88,8 +88,8 @@
             <input type="hidden" name="_csrf"   value="{{csrf_token}}">
             <input type="hidden" name="folder"  value="{{current_folder}}">
 
-            {{^has_messages}}<p><em>{{label_no_messages}}</em></p>{{/has_messages}}
-            {{#has_messages}}
+            {{^has_mail_list}}<p><em>{{label_no_messages}}</em></p>{{/has_mail_list}}
+            {{#has_mail_list}}
             <table id="wm-list">
                 <thead>
                 <tr>
@@ -100,17 +100,17 @@
                 </tr>
                 </thead>
                 <tbody>
-                {{#messages}}
+                {{#mail_list}}
                 <tr class="{{#row_even}}wm-even {{/row_even}}{{#unread}}wm-unread{{/unread}}">
                     <td><input type="checkbox" name="uid[]" value="{{uid}}"></td>
                     <td>{{from_display}}</td>
                     <td><a href="{{view_url}}">{{subject}}</a></td>
                     <td>{{date_fmt}}</td>
                 </tr>
-                {{/messages}}
+                {{/mail_list}}
                 </tbody>
             </table>
-            {{/has_messages}}
+            {{/has_mail_list}}
 
             {{! ── Bulk action bar ────────────────────────────────────────────────────── }}
         </form>{{! /wm-bulk-form — table + checkboxes }}
