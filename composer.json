@@ -1,6 +1,7 @@
 {
     "name": "astrx/module-webmail",
     "description": "In-browser IMAP/SMTP webmail client",
+    "license": "LicenseRef-DoWhatever",
     "type": "astrx-module",
     "keywords": [
         "astrx",
