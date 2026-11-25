@@ -27,11 +27,12 @@ use AstrX\Admin\AdminPermission;
 /**
  * Admin: webmail and IMAP settings.
  *
- * Two sections on one page:
- *   imap     ImapClient settings (host, port, encryption, timeout, SOCKS5)
+ * Three sections on one page:
+ *   imap     ImapClient settings (host, port, encryption, timeout)
+ *   proxy    Optional SOCKS5 host and port
  *   folders  WebmailService folder names (trash, sent, drafts) and page size
  *
- * Both live in Mail.config.php, which is where `AstrX\Mail\ImapClient` and
+ * These live in Mail.config.php, which is where `AstrX\Mail\ImapClient` and
  * `AstrX\Webmail\WebmailService` are configured from. The #[ConfigDomain]
  * attributes below declare that pairing once: this controller derives its
  * write target from them ({@see domainFile()}), ConfigWriter routes each
@@ -106,6 +107,7 @@ final class AdminConfigWebmailController extends AbstractController
         $section = self::mStr($posted, 'section', '');
         $result = match ($section) {
             'imap' => $this->saveImap($posted),
+            'proxy' => $this->saveProxy($posted),
             'folders' => $this->saveFolders($posted),
             default => null,
         };
@@ -135,6 +137,17 @@ final class AdminConfigWebmailController extends AbstractController
                 'imap_port' => max(1, self::mInt($p, 'imap_port', 993)),
                 'imap_encryption' => trim(self::mStr($p, 'imap_encryption', 'ssl')),
                 'imap_timeout' => max(5, self::mInt($p, 'imap_timeout', 30)),
+            ],
+        ]);
+    }
+
+    /** @param array<string,mixed> $p
+     *  @return Result<mixed>
+     */
+    private function saveProxy(array $p): Result
+    {
+        return $this->writer->write($this->domainFile(), [
+            'ImapClient' => [
                 'imap_socks5_host' => trim(self::mStr($p, 'imap_socks5_host', '')),
                 'imap_socks5_port' => max(1, self::mInt($p, 'imap_socks5_port', 9050)),
             ],
@@ -187,7 +200,7 @@ final class AdminConfigWebmailController extends AbstractController
             $this->config->getConfigString(
                 'ImapClient',
                 'imap_host',
-                'dovecot'
+                'localhost'
             )
         );
         $this->ctx->set(
@@ -228,7 +241,7 @@ final class AdminConfigWebmailController extends AbstractController
                 'ImapClient',
                 'imap_socks5_port',
                 9050
-            )
+            ) ?: 9050
         );
         $this->ctx->set('encryption_options', $encOptions);
 
@@ -266,7 +279,7 @@ final class AdminConfigWebmailController extends AbstractController
         $this->ctx->set('cfg_imap_verify_ssl',
                         $this->config->getConfigBool('ImapClient', 'imap_verify_ssl', true));
         $this->ctx->set('cfg_mailbox_is_username',
-                        $this->config->getConfigBool('WebmailService', 'mailbox_is_username', false));
+                        $this->config->getConfigBool('WebmailService', 'mailbox_is_username', true));
 
         $this->setI18n();
     }

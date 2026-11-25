@@ -69,6 +69,7 @@ return [
     'webmail.page'                => 'Pagina',
     'webmail.of'                  => 'di',
     'webmail.total'               => 'Totale',
+    'webmail.action_failed' => 'Il server di posta non ha completato l’operazione. Aggiorna la cartella per vedere quali messaggi sono cambiati.',
     'webmail.message_deleted'     => 'Messaggio eliminato.',
     'webmail.message_moved'       => 'Messaggio spostato.',
     'webmail.message_sent'        => 'Messaggio inviato.',

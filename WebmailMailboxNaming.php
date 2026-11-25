@@ -15,7 +15,7 @@ use AstrX\User\MailboxNaming;
 #[ConfigDomain('WebmailService', file: 'Mail')]
 final class WebmailMailboxNaming implements MailboxNaming
 {
-    private bool $mailboxIsUsername = false;
+    private bool $mailboxIsUsername = true;
 
     #[InjectConfig('mailbox_is_username')]
     public function setMailboxIsUsername(bool $v): void

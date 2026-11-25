@@ -41,7 +41,7 @@ use AstrX\Webmail\WebmailPermission;
  *   reply_uid=<n>      pre-fill compose as reply to message N
  *   attachment=<n>     download attachment index N from ?uid=X&folder=Y
  *
- * POST actions (via PRG, all require CSRF except 'imap_login'):
+ * POST actions (via PRG, all require CSRF):
  *   imap_login     store IMAP password in encrypted session
  *   send           send message (To/CC/BCC/Subject/Body)
  *   save_draft     save draft to Drafts folder
@@ -121,14 +121,7 @@ final class WebmailController extends AbstractController
         // ── Require IMAP password ─────────────────────────────────────────────
         $imapPass = $this->credentials->password();
         if ($imapPass === '') {
-            if ($this->webmail->mailserverIsLocal()) {
-                // mailserver_is_local=true means the login password should have
-                // been stored at login time. If it's missing now, the session is
-                // in an inconsistent state — show an error rather than the prompt.
-                $this->buildLoginContext($selfUrl, imapError: true);
-            } else {
-                $this->buildLoginContext($selfUrl, imapError: false);
-            }
+            $this->buildLoginContext($selfUrl, imapError: false);
             return $this->ok();
         }
 
@@ -205,11 +198,18 @@ final class WebmailController extends AbstractController
             return $selfUrl;
         }
 
-        // Establish IMAP for mutation actions
+        if ($action === 'disconnect') {
+            $this->credentials->clear();
+            return $selfUrl;
+        }
         $imapPass = $this->credentials->password();
-        if ($imapPass !== '') {
-            $this->webmail->connect($this->session->mailbox(), $imapPass, $this->session->username())
-                ->drainTo($this->collector);
+        if ($imapPass === '') { return $selfUrl; }
+        $connection = $this->webmail->connect($this->session->mailbox(), $imapPass, $this->session->username());
+        if (!$connection->isOk()) {
+            $connection->drainTo($this->collector);
+            $this->credentials->clear();
+            $this->flash->set('error', $this->t->t('webmail.login.error'));
+            return $selfUrl;
         }
 
         $folderPRaw = $posted['folder'] ?? null;
@@ -222,68 +222,61 @@ final class WebmailController extends AbstractController
 
         switch ($action) {
             case 'send':
-                return $this->handleSend($posted, $selfUrl, $folder);
+                return $this->handleSend($posted, $folder);
 
             case 'save_draft':
-                return $this->handleSaveDraft($posted, $selfUrl, $folder);
+                return $this->handleSaveDraft($posted, $folder);
 
             case 'delete':
-                if ($uid > 0) {
-                    $this->webmail->deleteMessage($folder, $uid)->drainTo($this->collector);
-                    $this->flash->set('success', $this->t->t('webmail.message_deleted'));
-                }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
-
             case 'delete_bulk':
-                foreach ($uids as $u) {
-                    $this->webmail->deleteMessage($folder, $u)->drainTo($this->collector);
-                }
-                if ($uids !== []) {
-                    $this->flash->set('success', $this->t->t('webmail.messages_deleted'));
-                }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
-
             case 'move':
-                $target = trim(self::mStr($posted, 'target_folder', ''));
-                if ($uid > 0 && $target !== '') {
-                    $this->webmail->moveMessage($folder, $uid, $target)->drainTo($this->collector);
-                    $this->flash->set('success', $this->t->t('webmail.message_moved'));
-                }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
-
             case 'move_bulk':
+                $selected = str_ends_with($action, '_bulk') ? $uids : ($uid > 0 ? [$uid] : []);
+                $move = str_starts_with($action, 'move');
                 $target = trim(self::mStr($posted, 'target_folder', ''));
-                if ($uids !== [] && $target !== '') {
-                    foreach ($uids as $u) {
-                        $this->webmail->moveMessage($folder, $u, $target)->drainTo($this->collector);
+                if ($selected !== [] && (!$move || $target !== '')) {
+                    foreach ($selected as $messageId) {
+                        $result = $move ? $this->webmail->moveMessage($folder, $messageId, $target)
+                            : $this->webmail->deleteMessage($folder, $messageId);
+                        $result->drainTo($this->collector);
+                        if (!$result->isOk()) {
+                            $this->flash->set('error', $this->t->t('webmail.action_failed'));
+                            return $this->selfUrl(['folder' => $folder]);
+                        }
                     }
-                    $this->flash->set('success', $this->t->t('webmail.messages_moved'));
+                    $key = match ($action) {
+                        'delete' => 'webmail.message_deleted',
+                        'delete_bulk' => 'webmail.messages_deleted',
+                        'move' => 'webmail.message_moved',
+                        default => 'webmail.messages_moved',
+                    };
+                    $this->flash->set('success', $this->t->t($key));
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
+                return $this->selfUrl(['folder' => $folder]);
 
             case 'mark_seen':
                 if ($uid > 0) {
                     $this->webmail->setSeenFlag($folder, $uid, true)->drainTo($this->collector);
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid]);
+                return $this->selfUrl(['folder' => $folder, 'uid' => $uid]);
 
             case 'mark_unseen':
                 if ($uid > 0) {
                     $this->webmail->setSeenFlag($folder, $uid, false)->drainTo($this->collector);
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid]);
+                return $this->selfUrl(['folder' => $folder, 'uid' => $uid]);
 
             case 'mark_seen_bulk':
                 foreach ($uids as $u) {
                     $this->webmail->setSeenFlag($folder, $u, true)->drainTo($this->collector);
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
+                return $this->selfUrl(['folder' => $folder]);
 
             case 'mark_unseen_bulk':
                 foreach ($uids as $u) {
                     $this->webmail->setSeenFlag($folder, $u, false)->drainTo($this->collector);
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder]);
+                return $this->selfUrl(['folder' => $folder]);
 
             case 'trust_sender':
                 $email = trim(self::mStr($posted, 'sender_email', ''));
@@ -292,7 +285,7 @@ final class WebmailController extends AbstractController
                         ->drainTo($this->collector);
                     $this->flash->set('success', $this->t->t('webmail.sender_trusted'));
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid]);
+                return $this->selfUrl(['folder' => $folder, 'uid' => $uid]);
 
             case 'untrust_sender':
                 $email = trim(self::mStr($posted, 'sender_email', ''));
@@ -301,11 +294,8 @@ final class WebmailController extends AbstractController
                         ->drainTo($this->collector);
                     $this->flash->set('success', $this->t->t('webmail.sender_untrusted'));
                 }
-                return $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid]);
+                return $this->selfUrl(['folder' => $folder, 'uid' => $uid]);
 
-            case 'disconnect':
-                $this->credentials->clear();
-                return $selfUrl;
         }
 
         return $selfUrl;
@@ -314,7 +304,7 @@ final class WebmailController extends AbstractController
     // ── Send ──────────────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $posted */
-    private function handleSend(array $posted, string $selfUrl, string $folder): string
+    private function handleSend(array $posted, string $folder): string
     {
         $to        = trim(self::mStr($posted, 'to', ''));
         $cc        = trim(self::mStr($posted, 'cc', ''));
@@ -325,7 +315,7 @@ final class WebmailController extends AbstractController
 
         if ($to === '' || $subject === '' || $body === '') {
             $this->flash->set('error', $this->t->t('webmail.compose_fields_required'));
-            return $selfUrl . '?compose=1&folder=' . rawurlencode($folder);
+            return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
         }
 
         $fromAddress = $this->webmail->resolveLocalPart(
@@ -345,14 +335,14 @@ final class WebmailController extends AbstractController
 
         if ($r->isOk()) {
             $this->flash->set('success', $this->t->t('webmail.message_sent'));
-            return $selfUrl . '?' . http_build_query(['folder' => $folder]);
+            return $this->selfUrl(['folder' => $folder]);
         }
 
-        return $selfUrl . '?compose=1&folder=' . rawurlencode($folder);
+        return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
     }
 
     /** @param array<string, mixed> $posted */
-    private function handleSaveDraft(array $posted, string $selfUrl, string $folder): string
+    private function handleSaveDraft(array $posted, string $folder): string
     {
         $fromAddress = $this->webmail->resolveLocalPart(
             $this->session->mailbox(), $this->session->username()
@@ -370,7 +360,7 @@ final class WebmailController extends AbstractController
         if ($r->isOk()) {
             $this->flash->set('success', $this->t->t('webmail.draft_saved'));
         }
-        return $selfUrl . '?compose=1&folder=' . rawurlencode($folder);
+        return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
     }
 
     // ── Attachment download ───────────────────────────────────────────────────
@@ -386,7 +376,13 @@ final class WebmailController extends AbstractController
         $index  = (is_numeric($vq_attachment = $this->request->query()->get('attachment')) ? (int)$vq_attachment : 0);
         if ($uid <= 0) { return; }
 
-        $this->webmail->connect($this->session->mailbox(), $imapPass, $this->session->username());
+        $connection = $this->webmail->connect($this->session->mailbox(), $imapPass, $this->session->username());
+        if (!$connection->isOk()) {
+            $connection->drainTo($this->collector);
+            $this->credentials->clear();
+            $this->buildLoginContext($selfUrl, imapError: true);
+            return;
+        }
         $r = $this->webmail->getAttachment($folder, $uid, $index);
         if (!$r->isOk()) { $r->drainTo($this->collector); return; }
 
@@ -432,7 +428,7 @@ final class WebmailController extends AbstractController
         int    $show,
         string $sort,
     ): void {
-        $folders = $this->getFolders($selfUrl, $folder);
+        $folders = $this->getFolders($folder);
         $listR   = $this->webmail->listMessages($folder, $pn, $show);
         $listR->drainTo($this->collector);
         $list = $listR->isOk() ? $listR->unwrap()
@@ -454,20 +450,24 @@ final class WebmailController extends AbstractController
         $baseParams = array_filter(['folder' => $folder,
                                     'show' => $show ?: null,
                                     'sort' => $sort !== 'newest' ? $sort : null]);
-        $prevUrl = $selfUrl . '?' . http_build_query(array_merge($baseParams, ['pn' => $list['page'] - 1]));
-        $nextUrl = $selfUrl . '?' . http_build_query(array_merge($baseParams, ['pn' => $list['page'] + 1]));
+        $prevUrl = $this->selfUrl(array_merge($baseParams, ['pn' => $list['page'] - 1]));
+        $nextUrl = $this->selfUrl(array_merge($baseParams, ['pn' => $list['page'] + 1]));
 
         // Move-to options for bulk bar
         $moveOptions = [];
-        $foldersR    = $this->webmail->getFolders();
-        if ($foldersR->isOk()) {
-            foreach ($foldersR->unwrap() as $f) {
-                if ($f['name'] !== $folder) {
-                    $moveOptions[] = ['name' => $f['name'], 'display' => $f['display']];
-                }
+        foreach ($folders as $f) {
+            if ($f['name'] !== $folder) {
+                $moveOptions[] = ['name' => $f['name'], 'display' => $f['display']];
             }
         }
 
+        // A GET form replaces its action's query string at submission.
+        parse_str((string) parse_url($selfUrl, PHP_URL_QUERY), $routing);
+        $fields = [];
+        foreach ($routing as $name => $value) {
+            if (is_string($value)) { $fields[] = ['name' => $name, 'value' => $value]; }
+        }
+        $this->ctx->set('filter_route', $fields);
         $this->ctx->set('webmail_view',          'list');
         $this->ctx->set('webmail_view_login',     false);
         $this->ctx->set('webmail_view_list',      true);
@@ -476,7 +476,7 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_view_headers',   false);
         $this->ctx->set('folders',                $folders);
         $this->ctx->set('current_folder',         $folder);
-        $this->ctx->set('mail_list',              $this->decorateMessages($list['messages'], $folder, $selfUrl));
+        $this->ctx->set('mail_list',              $this->decorateMessages($list['messages'], $folder));
         $this->ctx->set('has_mail_list',          $list['messages'] !== []);
         $this->ctx->set('msg_total',              $list['total']);
         $this->ctx->set('msg_pages',              $list['pages']);
@@ -487,7 +487,7 @@ final class WebmailController extends AbstractController
         $this->ctx->set('has_next',               $list['page'] < $list['pages']);
         $this->ctx->set('prev_url',               $prevUrl);
         $this->ctx->set('next_url',               $nextUrl);
-        $this->ctx->set('compose_url',            $selfUrl . '?compose=1&folder=' . rawurlencode($folder));
+        $this->ctx->set('compose_url',            $this->selfUrl(['compose' => 1, 'folder' => $folder]));
         $this->ctx->set('move_options',           $moveOptions);
         $this->ctx->set('sort_newest',            $sort !== 'oldest');
         $this->ctx->set('sort_oldest',            $sort === 'oldest');
@@ -506,7 +506,7 @@ final class WebmailController extends AbstractController
         int    $uid,
         int    $pn,
     ): void {
-        $folders   = $this->getFolders($selfUrl, $folder);
+        $folders   = $this->getFolders($folder);
         $msgR      = $this->webmail->getMessage($folder, $uid);
         $msgR->drainTo($this->collector);
         $message   = $msgR->isOk() ? $msgR->unwrap() : null;
@@ -539,7 +539,7 @@ final class WebmailController extends AbstractController
                 'name'         => is_scalar($att['name'] ?? null) ? (string)$att['name'] : '',
                 'content_type' => is_scalar($att['content_type'] ?? null) ? (string)$att['content_type'] : '',
                 'size_fmt'     => $this->formatBytes(is_int($att['size'] ?? null) ? (int)$att['size'] : 0),
-                'download_url' => $selfUrl . '?' . http_build_query([
+                'download_url' => $this->selfUrl([
                                                                         'folder' => $folder, 'uid' => $uid, 'attachment' => $idx,
                                                                     ]),
             ];
@@ -552,9 +552,9 @@ final class WebmailController extends AbstractController
             }
         }
 
-        $backUrl     = $selfUrl . '?' . http_build_query(['folder' => $folder, 'pn' => $pn]);
-        $headersUrl  = $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid, 'headers' => 1, 'pn' => $pn]);
-        $replyUrl    = $selfUrl . '?' . http_build_query(['compose' => 1, 'reply_uid' => $uid, 'folder' => $folder]);
+        $backUrl     = $this->selfUrl(['folder' => $folder, 'pn' => $pn]);
+        $headersUrl  = $this->selfUrl(['folder' => $folder, 'uid' => $uid, 'headers' => 1, 'pn' => $pn]);
+        $replyUrl    = $this->selfUrl(['compose' => 1, 'reply_uid' => $uid, 'folder' => $folder]);
 
         $this->ctx->set('webmail_view',          'message');
         $this->ctx->set('webmail_view_login',     false);
@@ -592,14 +592,14 @@ final class WebmailController extends AbstractController
         int    $uid,
         int    $pn,
     ): void {
-        $folders   = $this->getFolders($selfUrl, $folder);
+        $folders   = $this->getFolders($folder);
         $rawR      = $this->webmail->fetchRawHeaders($folder, $uid);
         $rawR->drainTo($this->collector);
         $rawHeaders = $rawR->isOk() ? $rawR->unwrap() : $this->t->t('webmail.raw_headers_failed');
         $csrfToken  = $this->csrf->generate(self::FORM);
         $prgId      = $this->prg->createId($selfUrl);
 
-        $backUrl = $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $uid, 'pn' => $pn]);
+        $backUrl = $this->selfUrl(['folder' => $folder, 'uid' => $uid, 'pn' => $pn]);
 
         $this->ctx->set('webmail_view',          'headers');
         $this->ctx->set('webmail_view_login',     false);
@@ -621,7 +621,7 @@ final class WebmailController extends AbstractController
 
     private function buildComposeContext(string $selfUrl, string $folder, int $replyUid): void
     {
-        $folders   = $this->getFolders($selfUrl, $folder);
+        $folders   = $this->getFolders($folder);
         $csrfToken = $this->csrf->generate(self::FORM);
         $prgId     = $this->prg->createId($selfUrl);
 
@@ -664,8 +664,8 @@ final class WebmailController extends AbstractController
         $this->ctx->set('compose_in_reply_to',    $inReplyTo);
         // The address the message will be sent from, exactly as sendMessage() builds it.
         $localPart = $this->webmail->resolveLocalPart($this->session->mailbox(), $this->session->username());
-        $this->ctx->set('user_mailbox',           $this->session->username() . ' <' . $localPart . '@' . $this->webmail->mailDomain() . '>');
-        $this->ctx->set('back_url',               $selfUrl . '?' . http_build_query(['folder' => $folder]));
+        $this->ctx->set('user_mailbox',           $this->session->username() . ' <' . (str_contains($localPart, '@') ? $localPart : $localPart . '@' . $this->webmail->mailDomain()) . '>');
+        $this->ctx->set('back_url',               $this->selfUrl(['folder' => $folder]));
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
         $this->ctx->set('base_url',               $selfUrl);
@@ -676,21 +676,22 @@ final class WebmailController extends AbstractController
     // Helpers
     // =========================================================================
 
-    private function selfUrl(): string
+    /** @param array<string,scalar> $query */
+    private function selfUrl(array $query = []): string
     {
         $urlId = $this->page->i18n
             ? $this->t->t($this->page->urlId, fallback: $this->page->urlId)
             : $this->page->urlId;
-        return $this->urlGen->toPage($urlId);
+        return $this->urlGen->toPage($urlId, $query);
     }
 
     /** @return list<array<string, mixed>> */
-    private function getFolders(string $selfUrl, string $currentFolder): array
+    private function getFolders(string $currentFolder): array
     {
         $r = $this->webmail->getFolders();
         if (!$r->isOk()) { return []; }
-        return array_map(function ($f) use ($selfUrl, $currentFolder) {
-            $f['url']        = $selfUrl . '?' . http_build_query(['folder' => $f['name']]);
+        return array_map(function ($f) use ($currentFolder) {
+            $f['url']        = $this->selfUrl(['folder' => $f['name']]);
             $f['is_current'] = $f['name'] === $currentFolder;
             $f['has_unseen'] = $f['unseen'] > 0;
             return $f;
@@ -707,14 +708,14 @@ final class WebmailController extends AbstractController
     }
 
     /**
-     * @param list<array<string,mixed>> $messages
+     * @param list<array{uid:int,flags:list<string>,subject:string,from_display:string,date_str:string,date_ts:int,seen:bool}> $messages
      * @return list<array<string,mixed>>
      */
-    private function decorateMessages(array $messages, string $folder, string $selfUrl): array
+    private function decorateMessages(array $messages, string $folder): array
     {
         $even = false;
-        return array_map(function ($m) use ($folder, $selfUrl, &$even) {
-            $m['view_url']  = $selfUrl . '?' . http_build_query(['folder' => $folder, 'uid' => $m['uid']]);
+        return array_map(function ($m) use ($folder, &$even) {
+            $m['view_url']  = $this->selfUrl(['folder' => $folder, 'uid' => $m['uid']]);
             $dateTsV = $m['date_ts'] ?? 0;
             $m['date_fmt']  = (is_int($dateTsV) && $dateTsV > 0) ? date('d M Y H:i', $dateTsV) : (is_scalar($m['date_str'] ?? null) ? (string)$m['date_str'] : '');
             $m['unread']    = !$m['seen'];

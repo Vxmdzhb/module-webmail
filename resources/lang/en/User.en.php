@@ -69,6 +69,7 @@ return [
     'webmail.page'                => 'Page',
     'webmail.of'                  => 'of',
     'webmail.total'               => 'Total',
+    'webmail.action_failed' => 'The mail server could not complete the action. Refresh the folder to see which messages changed.',
     'webmail.message_deleted'     => 'Message deleted.',
     'webmail.message_moved'       => 'Message moved.',
     'webmail.message_sent'        => 'Message sent.',

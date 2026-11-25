@@ -41,7 +41,7 @@ final class WebmailService
      * user's username IS their mailbox local-part and the mailbox column
      * is not populated (or is ignored during registration).
      */
-    private bool   $mailboxIsUsername         = false;
+    private bool   $mailboxIsUsername         = true;
     /**
      * When true, the mail server is local — the user's login password equals
      * their IMAP password, so no separate IMAP auth prompt is shown.
@@ -108,15 +108,22 @@ final class WebmailService
      */
     public function connect(string $mailboxLocalPart, string $imapPassword, string $username = ''): Result
     {
-        if ($this->imap->isConnected()) { return Result::ok(true); }
-        $r = $this->imap->connect();
-        if (!$r->isOk()) { return $r; }
-        // When mailbox_is_username, the username itself is the IMAP local-part.
-        $localPart = $this->mailboxIsUsername && $username !== '' ? $username : $mailboxLocalPart;
-        $loginId   = $this->imapLoginUseFullAddress
-            ? $localPart . '@' . $this->mailDomain
-            : $localPart;
-        return $this->imap->login($loginId, $imapPassword);
+        if (!$this->imap->isConnected()) {
+            $connection = $this->imap->connect();
+            if (!$connection->isOk()) {
+                $this->disconnect();
+                return $connection;
+            }
+        }
+        $mailbox = $this->resolveLocalPart($mailboxLocalPart, $username);
+        // Older accounts can already have a qualified mailbox address.
+        $parts = explode('@', $mailbox, 2);
+        $loginId = $this->imapLoginUseFullAddress
+            ? (isset($parts[1]) ? $mailbox : $mailbox . '@' . $this->mailDomain)
+            : $parts[0];
+        $login = $this->imap->login($loginId, $imapPassword);
+        if (!$login->isOk()) { $this->disconnect(); }
+        return $login;
     }
 
     /**
@@ -233,7 +240,7 @@ final class WebmailService
 
     /**
      * List messages in a folder with pagination.
-     * @return Result<array{messages:list<array<string,mixed>>,total:int,pages:int,page:int,per_page:int}>
+     * @return Result<array{messages:list<array{uid:int,flags:list<string>,subject:string,from_display:string,date_str:string,date_ts:int,seen:bool}>,total:int,pages:int,page:int,per_page:int}>
      */
     public function listMessages(string $folder, int $page = 1, int $perPageOverride = 0): Result
     {
@@ -353,7 +360,7 @@ final class WebmailService
     {
         $r = $this->imap->selectFolder($folder);
         if (!$r->isOk()) { return Result::err(null, $r->diagnostics()); }
-        return $this->imap->deleteMessage($uid, $this->trashFolder);
+        return $this->imap->deleteMessage($uid, $folder === $this->trashFolder ? '' : $this->trashFolder);
     }
 
     /** @return Result<bool> */

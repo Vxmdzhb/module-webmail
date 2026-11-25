@@ -61,7 +61,7 @@
         {{! ── Filter toolbar (show + sort) — plain form, no JS ─────────────────── }}
         <div class="wm-toolbar">
             <form method="GET" action="{{filter_action}}">
-                {{&sid_input}}
+                {{#filter_route}}<input type="hidden" name="{{name}}" value="{{value}}">{{/filter_route}}
                 <input type="hidden" name="folder" value="{{current_folder}}">
                 {{label_show}}: <input type="text" name="show" class="input" size="4"
                                        value="{{current_per_page}}">
@@ -113,49 +113,25 @@
             {{/has_mail_list}}
 
             {{! ── Bulk action bar ────────────────────────────────────────────────────── }}
-        </form>{{! /wm-bulk-form — table + checkboxes }}
-        <div class="wm-bulk">
-            {{label_transform}}:
-            <form method="POST" style="display:inline">
-                <input type="hidden" name="prg_id" value="{{prg_id}}">
-                <input type="hidden" name="_csrf"  value="{{csrf_token}}">
-                <input type="hidden" name="action" value="mark_seen_bulk">
-                <input type="hidden" name="folder" value="{{current_folder}}">
-                <input type="submit" value="{{btn_mark_read_bulk}}" class="input">
-            </form>
-            <form method="POST" style="display:inline">
-                <input type="hidden" name="prg_id" value="{{prg_id}}">
-                <input type="hidden" name="_csrf"  value="{{csrf_token}}">
-                <input type="hidden" name="action" value="mark_unseen_bulk">
-                <input type="hidden" name="folder" value="{{current_folder}}">
-                <input type="submit" value="{{btn_mark_unread_bulk}}" class="input">
-            </form>
-            <form method="POST" style="display:inline">
-                <input type="hidden" name="prg_id" value="{{prg_id}}">
-                <input type="hidden" name="_csrf"  value="{{csrf_token}}">
-                <input type="hidden" name="action" value="delete_bulk">
-                <input type="hidden" name="folder" value="{{current_folder}}">
-                <input type="submit" value="{{btn_delete_bulk}}" class="input">
-            </form>
-            &nbsp;|&nbsp;
-            {{label_move_selected}}:
-            <form method="POST" style="display:inline">
-                <input type="hidden" name="prg_id" value="{{prg_id}}">
-                <input type="hidden" name="_csrf"  value="{{csrf_token}}">
-                <input type="hidden" name="action" value="move_bulk">
-                <input type="hidden" name="folder" value="{{current_folder}}">
+            <div class="wm-bulk">
+                {{label_transform}}:
+                <button type="submit" name="action" value="mark_seen_bulk" class="input">{{btn_mark_read_bulk}}</button>
+                <button type="submit" name="action" value="mark_unseen_bulk" class="input">{{btn_mark_unread_bulk}}</button>
+                <button type="submit" name="action" value="delete_bulk" class="input">{{btn_delete_bulk}}</button>
+                &nbsp;|&nbsp;
+                {{label_move_selected}}:
                 <select name="target_folder" class="input">
                     {{#move_options}}<option value="{{name}}">{{display}}</option>{{/move_options}}
                 </select>
-                <input type="submit" value="{{btn_move_bulk}}" class="input">
-            </form>
-        </div>
+                <button type="submit" name="action" value="move_bulk" class="input">{{btn_move_bulk}}</button>
+            </div>
+        </form>
 
         {{! ── Pagination (text input like news) ──────────────────────────────────── }}
         <div class="wm-pager">
             {{#has_prev}}<a href="{{prev_url}}" class="input">{{label_prev}}</a>{{/has_prev}}
             <form method="GET" action="{{filter_action}}">
-                {{&sid_input}}
+                {{#filter_route}}<input type="hidden" name="{{name}}" value="{{value}}">{{/filter_route}}
                 <input type="hidden" name="folder"  value="{{current_folder}}">
                 <input type="hidden" name="show"    value="{{current_per_page}}">
                 <input type="hidden" name="sort"    value="{{current_sort}}">
