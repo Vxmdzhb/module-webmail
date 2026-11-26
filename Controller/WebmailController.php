@@ -490,7 +490,9 @@ final class WebmailController extends AbstractController
 
         if (!headers_sent()) {
             header('Content-Type: '        . ($att['content_type'] ?: 'application/octet-stream'));
-            header('Content-Disposition: attachment; filename="' . $safeName . '"');
+            // An ASCII fallback, and the real name (accents, spaces) for every
+            // browser that reads RFC 6266's filename*.
+            header('Content-Disposition: attachment; filename="' . $safeName . '"; filename*=UTF-8\'\'' . rawurlencode($att['name']));
             header('Content-Length: '      . strlen($att['data']));
             header('Cache-Control: private, no-cache');
             header('X-Content-Type-Options: nosniff');
