@@ -7,8 +7,7 @@
 {{! ── IMAP login prompt ──────────────────────────────────────────────────── }}
 {{#webmail_view_login}}
 <h2>{{webmail_login_heading}}</h2>
-<p>{{webmail_login_body}}</p>
-{{#webmail_imap_error}}<p class="diag-error">{{webmail_login_error}}</p>{{/webmail_imap_error}}
+<p>{{webmail_login_body}}<br>{{webmail_login_account}}</p>
 <form method="POST">
     <input type="hidden" name="prg_id" value="{{prg_id}}">
     <input type="hidden" name="_csrf"  value="{{csrf_token}}">

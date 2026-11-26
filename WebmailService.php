@@ -115,13 +115,7 @@ final class WebmailService
                 return $connection;
             }
         }
-        $mailbox = $this->resolveLocalPart($mailboxLocalPart, $username);
-        // Older accounts can already have a qualified mailbox address.
-        $parts = explode('@', $mailbox, 2);
-        $loginId = $this->imapLoginUseFullAddress
-            ? (isset($parts[1]) ? $mailbox : $mailbox . '@' . $this->mailDomain)
-            : $parts[0];
-        $login = $this->imap->login($loginId, $imapPassword);
+        $login = $this->imap->login($this->loginName($mailboxLocalPart, $username), $imapPassword);
         if (!$login->isOk()) { $this->disconnect(); }
         return $login;
     }
@@ -473,9 +467,28 @@ final class WebmailService
      * Return the mailbox local-part to use for From: header construction,
      * honouring mailbox_is_username.
      */
+    /**
+     * The account's mailbox: the one stored on the account, which is the
+     * mailbox on the mail server. The username stands in only for an account
+     * without one, when mailbox_is_username is on. Preferring the username
+     * over a stored mailbox logged every account whose mailbox differs from
+     * its username (an older account, a renamed one) into the wrong mailbox.
+     */
     public function resolveLocalPart(string $mailboxLocalPart, string $username): string
     {
-        return $this->mailboxIsUsername && $username !== '' ? $username : $mailboxLocalPart;
+        $mailbox = trim($mailboxLocalPart);
+        return $mailbox === '' && $this->mailboxIsUsername ? $username : $mailbox;
+    }
+
+    /** The name sent to the IMAP server's LOGIN for this account. */
+    public function loginName(string $mailboxLocalPart, string $username = ''): string
+    {
+        $mailbox = $this->resolveLocalPart($mailboxLocalPart, $username);
+        // Older accounts can already have a qualified mailbox address.
+        $parts = explode('@', $mailbox, 2);
+        return $this->imapLoginUseFullAddress
+            ? (isset($parts[1]) ? $mailbox : $mailbox . '@' . $this->mailDomain)
+            : $parts[0];
     }
     public function trashFolder(): string  { return $this->trashFolder; }
     public function sentFolder(): string   { return $this->sentFolder; }

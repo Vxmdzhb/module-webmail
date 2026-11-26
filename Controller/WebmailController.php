@@ -412,7 +412,12 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_view_message',  false);
         $this->ctx->set('webmail_view_compose',  false);
         $this->ctx->set('webmail_view_headers',  false);
-        $this->ctx->set('webmail_imap_error',    $imapError);
+        if ($imapError) {
+            $this->flash->set('error', $this->t->t('webmail.login.error'));
+        }
+        $this->ctx->set('webmail_login_account', $this->t->t('webmail.login.account', [
+            'account' => $this->webmail->loginName($this->session->mailbox(), $this->session->username()),
+        ]));
         $this->ctx->set('prg_id',                $this->prg->createId($selfUrl));
         $this->ctx->set('base_url',              $selfUrl);
         // CSRF token for the IMAP-login form. The user already holds a
@@ -716,8 +721,7 @@ final class WebmailController extends AbstractController
         $even = false;
         return array_map(function ($m) use ($folder, &$even) {
             $m['view_url']  = $this->selfUrl(['folder' => $folder, 'uid' => $m['uid']]);
-            $dateTsV = $m['date_ts'] ?? 0;
-            $m['date_fmt']  = (is_int($dateTsV) && $dateTsV > 0) ? date('d M Y H:i', $dateTsV) : (is_scalar($m['date_str'] ?? null) ? (string)$m['date_str'] : '');
+            $m['date_fmt']  = $m['date_ts'] > 0 ? date('d M Y H:i', $m['date_ts']) : $m['date_str'];
             $m['unread']    = !$m['seen'];
             $m['row_even']  = $even;
             $even           = !$even;
@@ -747,7 +751,6 @@ final class WebmailController extends AbstractController
             'webmail_login_body'             => 'webmail.login.body',
             'webmail_login_password'         => 'webmail.login.password',
             'webmail_login_btn'              => 'webmail.login.btn',
-            'webmail_login_error'            => 'webmail.login.error',
             'webmail_compose_heading'        => 'webmail.compose.heading',
             'webmail_compose_from'           => 'webmail.compose.from',
             'webmail_compose_to'             => 'webmail.compose.to',
