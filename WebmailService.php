@@ -122,7 +122,7 @@ final class WebmailService
 
     /**
      * Save a draft to the Drafts folder.
-     * @return Result<bool>
+     * @return Result<int>  the draft's UID in Drafts, or 0 when the server did not say
      */
     public function saveDraft(
         string $fromAddress,
@@ -132,15 +132,31 @@ final class WebmailService
         string $bodyText,
         string $cc = '',
         string $bcc = '',
+        string $inReplyTo = '',
+        string $priority = 'normal',
+        string $replyTo = '',
     ): Result {
         $draftFrom = $fromAddress !== '' && !str_contains($fromAddress, '@')
             ? $fromAddress . '@' . $this->mailDomain
             : $fromAddress;
-        if (($bad = $this->guardHeaders($draftFrom, $fromName, $toAddress, $subject, $cc, $bcc)) !== null) {
+        if (($bad = $this->guardHeaders($draftFrom, $fromName, $toAddress, $subject, $cc, $bcc, $inReplyTo, $replyTo)) !== null) {
             return $bad;
         }
-        $raw = $this->buildRawMessage($draftFrom, $fromName, $toAddress, $subject, $bodyText, '', $cc, $bcc, '');
-        return $this->imap->appendToSent($raw, $this->draftsFolder);
+        $raw = $this->buildRawMessage($draftFrom, $fromName, $toAddress, $subject, $bodyText, '', $cc, $bcc, $inReplyTo, $priority, $replyTo);
+        $r = $this->imap->appendToSent($raw, $this->draftsFolder);
+        return $r->isOk() ? Result::ok($this->imap->lastAppendUid(), $r->diagnostics()) : Result::err(null, $r->diagnostics());
+    }
+
+    /**
+     * Remove a draft for good (it has been sent, or saved again under a new
+     * UID). Drafts are not moved to Trash: the newer copy replaces them.
+     * @return Result<bool>
+     */
+    public function discardDraft(int $uid): Result
+    {
+        $r = $this->imap->selectFolder($this->draftsFolder);
+        if (!$r->isOk()) { return Result::err(null, $r->diagnostics()); }
+        return $this->imap->deleteMessage($uid, '');
     }
 
     /**
@@ -211,10 +227,19 @@ final class WebmailService
             $this->trashFolder   => 'trash',
         ];
 
+        // The server names its special folders itself (RFC 6154) when it can:
+        // a Sent folder called "Sent Items" is still the Sent folder.
+        $specialUse = ['\\Sent' => 'sent', '\\Drafts' => 'drafts', '\\Trash' => 'trash'];
+
         $folders = [];
         foreach ($r->unwrap() as $folder) {
             $statusR = $this->imap->folderStatus($folder['name']);
             $status  = $statusR->isOk() ? $statusR->unwrap() : ['total' => 0, 'unseen' => 0, 'recent' => 0];
+            foreach ($folder['flags'] as $flag) {
+                if (isset($specialUse[$flag]) && !isset($specialFolders[$folder['name']])) {
+                    $specialFolders[$folder['name']] = $specialUse[$flag];
+                }
+            }
             $special = isset($specialFolders[$folder['name']]);
             $folders[] = [
                 'name'         => $folder['name'],
@@ -233,10 +258,10 @@ final class WebmailService
     // =========================================================================
 
     /**
-     * List messages in a folder with pagination.
-     * @return Result<array{messages:list<array{uid:int,flags:list<string>,subject:string,from_display:string,date_str:string,date_ts:int,seen:bool}>,total:int,pages:int,page:int,per_page:int}>
+     * List messages in a folder with pagination, newest first or oldest first.
+     * @return Result<array{messages:list<array{uid:int,flags:list<string>,subject:string,from_display:string,to_display:string,date_str:string,date_ts:int,seen:bool}>,total:int,pages:int,page:int,per_page:int}>
      */
-    public function listMessages(string $folder, int $page = 1, int $perPageOverride = 0): Result
+    public function listMessages(string $folder, int $page = 1, int $perPageOverride = 0, bool $oldestFirst = false): Result
     {
         $page    = max(1, $page);
         $perPage = $perPageOverride > 0
@@ -257,7 +282,7 @@ final class WebmailService
                               ]);
         }
 
-        $r = $this->imap->fetchHeadersPage($totalMessages, $page, $perPage);
+        $r = $this->imap->fetchHeadersPage($totalMessages, $page, $perPage, $oldestFirst);
         if (!$r->isOk()) { return Result::err(null, $r->diagnostics()); }
 
         return Result::ok([
@@ -332,8 +357,8 @@ final class WebmailService
             return $bad;
         }
 
-        // Send via SMTP, now including Cc/Bcc in the envelope + Cc header.
-        $r = $this->mailer->send($toAddress, '', $subject, $bodyText, $bodyHtml, $resolvedFrom, $fromName, $priority, $readReceipt, [], $cc, $bcc);
+        // Send via SMTP: Cc/Bcc in the envelope, Cc and Reply-To as headers.
+        $r = $this->mailer->send($toAddress, '', $subject, $bodyText, $bodyHtml, $resolvedFrom, $fromName, $priority, $readReceipt, [], $cc, $bcc, $replyTo, $inReplyTo);
         if (!$r->isOk()) { return $r; }
 
         // Build raw message for IMAP APPEND
@@ -463,10 +488,6 @@ final class WebmailService
     public function mailDomain(): string        { return $this->mailDomain; }
     public function mailboxIsUsername(): bool   { return $this->mailboxIsUsername; }
 
-    /**
-     * Return the mailbox local-part to use for From: header construction,
-     * honouring mailbox_is_username.
-     */
     /**
      * The account's mailbox: the one stored on the account, which is the
      * mailbox on the mail server. The username stands in only for an account

@@ -76,8 +76,7 @@
         </div>
 
         {{! ── "Viewing Messages: X to Y (Z total)" ──────────────────────────────── }}
-        <p class="wm-info">{{label_viewing}}: <strong>{{msg_from}}</strong>
-            {{label_to}} <strong>{{msg_to}}</strong> ({{msg_total}} {{label_total}})</p>
+        <p class="wm-info">{{label_range}}</p>
 
         {{! ── Message table wrapped in the bulk-action form ─────────────────────── }}
         {{! The outer form wraps the table so all checkboxes post to the same form. }}
@@ -92,8 +91,9 @@
             <table id="wm-list">
                 <thead>
                 <tr>
-                    <th style="width:1.5em">&#x2610;</th>
-                    <th>{{label_from}}</th>
+                    {{! Select all is a link: the site runs without JavaScript. }}
+                    <th style="width:1.5em">{{^all_selected}}<a href="{{select_all_url}}" title="{{label_select_all}}" aria-label="{{label_select_all}}">&#x2610;</a>{{/all_selected}}{{#all_selected}}<a href="{{select_none_url}}" title="{{label_select_none}}" aria-label="{{label_select_none}}">&#x2611;</a>{{/all_selected}}</th>
+                    <th>{{label_party}}</th>
                     <th>{{label_subject}}</th>
                     <th>{{label_date}}</th>
                 </tr>
@@ -101,8 +101,8 @@
                 <tbody>
                 {{#mail_list}}
                 <tr class="{{#row_even}}wm-even {{/row_even}}{{#unread}}wm-unread{{/unread}}">
-                    <td><input type="checkbox" name="uid[]" value="{{uid}}"></td>
-                    <td>{{from_display}}</td>
+                    <td><input type="checkbox" name="uid[]" value="{{uid}}"{{#checked}} checked{{/checked}}></td>
+                    <td>{{party}}</td>
                     <td><a href="{{view_url}}">{{subject}}</a></td>
                     <td>{{date_fmt}}</td>
                 </tr>
@@ -149,6 +149,7 @@
 
         <div class="wm-msg-actions">
             <a href="{{back_url}}"    class="input">{{btn_back}}</a>
+            {{#is_draft}}<a href="{{edit_draft_url}}" class="input">{{btn_edit_draft}}</a>{{/is_draft}}
             <a href="{{reply_url}}"   class="input">{{btn_reply}}</a>
             <a href="{{forward_url}}" class="input">{{btn_forward}}</a>
             <a href="{{headers_url}}" class="input">{{label_view_headers}}</a>
@@ -230,7 +231,8 @@
         <table id="wm-msg-hdr">
             <tr><th>{{label_from}}:</th><td>{{message.from}}</td></tr>
             <tr><th>{{label_to}}:</th>  <td>{{message.to}}</td></tr>
-            {{#message.cc}}<tr><th>CC:</th><td>{{message.cc}}</td></tr>{{/message.cc}}
+            {{#message.cc}}<tr><th>{{label_cc}}:</th><td>{{message.cc}}</td></tr>{{/message.cc}}
+            {{#message.reply_to}}<tr><th>{{label_reply_to}}:</th><td>{{message.reply_to}}</td></tr>{{/message.reply_to}}
             <tr><th>{{label_subject}}:</th><td><strong>{{message.subject}}</strong></td></tr>
             <tr><th>{{label_date}}:</th>   <td>{{message.date}}</td></tr>
         </table>
@@ -264,7 +266,7 @@
 
         {{/message_found}}
         {{^message_found}}
-        <p><em>Message not found.</em></p>
+        <p><em>{{label_message_not_found}}</em></p>
         <a href="{{back_url}}" class="input">{{btn_back}}</a>
         {{/message_found}}
         {{/webmail_view_message}}
@@ -286,14 +288,16 @@
             <input type="hidden" name="_csrf"       value="{{csrf_token}}">
             <input type="hidden" name="folder"      value="{{current_folder}}">
             <input type="hidden" name="in_reply_to" value="{{compose_in_reply_to}}">
+            <input type="hidden" name="draft_uid"   value="{{compose_draft_uid}}">
 
             <p style="margin:0 0 5px">
                 <input type="hidden" name="action" value="send">
                 <input type="submit" value="{{webmail_compose_send}}" class="input">
-                <button type="submit" name="action" value="save_draft" class="input">{{webmail_compose_save_draft}}</button>
+                <button type="submit" name="action" value="save_draft" class="input" formnovalidate>{{webmail_compose_save_draft}}</button>
                 <a href="{{back_url}}" class="input">{{webmail_compose_cancel}}</a>
             </p>
 
+            {{#has_compose_note}}<p class="wm-notice">{{compose_note}}</p>{{/has_compose_note}}
             <table id="wm-compose-hdr">
                 <tr>
                     <th>{{webmail_compose_from}}</th>
@@ -301,19 +305,20 @@
                 </tr>
                 <tr>
                     <th>{{webmail_compose_to}}</th>
-                    <td><input type="email" name="to" class="input" value="{{compose_to}}"></td>
+                    {{! text, not email: "Name <addr>" and several addresses are both valid here. }}
+                    <td><input type="text" name="to" class="input" value="{{compose_to}}" required spellcheck="false"></td>
                 </tr>
                 <tr>
                     <th>{{webmail_compose_cc}}</th>
-                    <td><input type="text" name="cc" class="input" value="{{compose_cc}}" placeholder="optional"></td>
+                    <td><input type="text" name="cc" class="input" value="{{compose_cc}}" placeholder="{{label_optional}}" spellcheck="false"></td>
                 </tr>
                 <tr>
                     <th>{{webmail_compose_bcc}}</th>
-                    <td><input type="text" name="bcc" class="input" value="{{compose_bcc}}" placeholder="optional"></td>
+                    <td><input type="text" name="bcc" class="input" value="{{compose_bcc}}" placeholder="{{label_optional}}" spellcheck="false"></td>
                 </tr>
                 <tr>
                     <th>{{label_reply_to_field}}</th>
-                    <td><input type="email" name="reply_to" class="input" value="{{compose_reply_to}}" placeholder="optional"></td>
+                    <td><input type="text" name="reply_to" class="input" value="{{compose_reply_to}}" placeholder="{{label_optional}}" spellcheck="false"></td>
                 </tr>
                 <tr>
                     <th>{{webmail_compose_subject}}</th>
@@ -323,15 +328,15 @@
                     <th>{{label_priority}}</th>
                     <td>
                         <select name="priority" class="input">
-                            <option value="high">{{label_priority_high}}</option>
-                            <option value="normal" selected>{{label_priority_normal}}</option>
-                            <option value="low">{{label_priority_low}}</option>
+                            <option value="high"{{#priority_high}} selected{{/priority_high}}>{{label_priority_high}}</option>
+                            <option value="normal"{{#priority_normal}} selected{{/priority_normal}}>{{label_priority_normal}}</option>
+                            <option value="low"{{#priority_low}} selected{{/priority_low}}>{{label_priority_low}}</option>
                         </select>
                     </td>
                 </tr>
                 <tr>
                     <th></th>
-                    <td><label><input type="checkbox" name="read_receipt" value="1"> {{label_read_receipt}}</label></td>
+                    <td><label><input type="checkbox" name="read_receipt" value="1" style="width:auto"{{#compose_read_receipt}} checked{{/compose_read_receipt}}> {{label_read_receipt}}</label></td>
                 </tr>
             </table>
 
@@ -341,7 +346,7 @@
 
             <p style="margin:4px 0 0">
                 <input type="submit" value="{{webmail_compose_send}}" class="input">
-                <button type="submit" name="action" value="save_draft" class="input">{{webmail_compose_save_draft}}</button>
+                <button type="submit" name="action" value="save_draft" class="input" formnovalidate>{{webmail_compose_save_draft}}</button>
                 <a href="{{back_url}}" class="input">{{webmail_compose_cancel}}</a>
             </p>
         </form>

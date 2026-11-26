@@ -39,6 +39,9 @@ use AstrX\Webmail\WebmailPermission;
  *   headers=1          view raw headers for ?uid=N
  *   compose=1          show compose form
  *   reply_uid=<n>      pre-fill compose as reply to message N
+ *   forward_uid=<n>    pre-fill compose as a forward of message N
+ *   draft_uid=<n>      edit draft N of the Drafts folder
+ *   select=all         list view with every message ticked (no JavaScript)
  *   attachment=<n>     download attachment index N from ?uid=X&folder=Y
  *
  * POST actions (via PRG, all require CSRF):
@@ -61,6 +64,8 @@ final class WebmailController extends AbstractController
 {
     private const FORM  = 'webmail';
     private const INBOX = 'INBOX';
+    /** Login secret holding a compose form that could not be sent, to refill it. */
+    private const COMPOSE_STASH = 'webmail.compose';
 
     public function __construct(
         DiagnosticsCollector                        $collector,
@@ -148,17 +153,20 @@ final class WebmailController extends AbstractController
         $sort     = (is_scalar($vsort = $this->request->query()->get('sort') ?? 'newest') ? (string)$vsort : 'newest');
         $compose  = ($this->request->query()->get('compose') !== null);
         $replyUid = (is_numeric($vq_reply_uid = $this->request->query()->get('reply_uid')) ? (int)$vq_reply_uid : 0);
+        $fwdUid   = (is_numeric($vq_fwd = $this->request->query()->get('forward_uid')) ? (int)$vq_fwd : 0);
+        $draftUid = (is_numeric($vq_draft = $this->request->query()->get('draft_uid')) ? (int)$vq_draft : 0);
         $viewHdrs = ($this->request->query()->get('headers') !== null);
+        $selectAll = $this->request->query()->get('select') === 'all';
 
         // ── Route to the appropriate view ─────────────────────────────────────
-        if ($compose || $replyUid > 0) {
-            $this->buildComposeContext($selfUrl, $folder, $replyUid);
+        if ($compose || $replyUid > 0 || $fwdUid > 0 || $draftUid > 0) {
+            $this->buildComposeContext($selfUrl, $folder, $replyUid, $fwdUid, $draftUid);
         } elseif ($uid > 0 && $viewHdrs) {
             $this->buildRawHeadersContext($selfUrl, $folder, $uid, $pn);
         } elseif ($uid > 0) {
             $this->buildMessageContext($selfUrl, $folder, $uid, $pn);
         } else {
-            $this->buildFolderContext($selfUrl, $folder, $pn, $show, $sort);
+            $this->buildFolderContext($selfUrl, $folder, $pn, $show, $sort, $selectAll);
         }
 
         return $this->ok();
@@ -232,9 +240,13 @@ final class WebmailController extends AbstractController
             case 'move':
             case 'move_bulk':
                 $selected = str_ends_with($action, '_bulk') ? $uids : ($uid > 0 ? [$uid] : []);
+                if ($selected === []) {
+                    $this->flash->set('info', $this->t->t('webmail.nothing_selected'));
+                    return $this->selfUrl(['folder' => $folder]);
+                }
                 $move = str_starts_with($action, 'move');
                 $target = trim(self::mStr($posted, 'target_folder', ''));
-                if ($selected !== [] && (!$move || $target !== '')) {
+                if (!$move || $target !== '') {
                     foreach ($selected as $messageId) {
                         $result = $move ? $this->webmail->moveMessage($folder, $messageId, $target)
                             : $this->webmail->deleteMessage($folder, $messageId);
@@ -267,15 +279,21 @@ final class WebmailController extends AbstractController
                 return $this->selfUrl(['folder' => $folder, 'uid' => $uid]);
 
             case 'mark_seen_bulk':
-                foreach ($uids as $u) {
-                    $this->webmail->setSeenFlag($folder, $u, true)->drainTo($this->collector);
-                }
-                return $this->selfUrl(['folder' => $folder]);
-
             case 'mark_unseen_bulk':
-                foreach ($uids as $u) {
-                    $this->webmail->setSeenFlag($folder, $u, false)->drainTo($this->collector);
+                if ($uids === []) {
+                    $this->flash->set('info', $this->t->t('webmail.nothing_selected'));
+                    return $this->selfUrl(['folder' => $folder]);
                 }
+                $seen = $action === 'mark_seen_bulk';
+                foreach ($uids as $u) {
+                    $result = $this->webmail->setSeenFlag($folder, $u, $seen);
+                    $result->drainTo($this->collector);
+                    if (!$result->isOk()) {
+                        $this->flash->set('error', $this->t->t('webmail.action_failed'));
+                        return $this->selfUrl(['folder' => $folder]);
+                    }
+                }
+                $this->flash->set('success', $this->t->t($seen ? 'webmail.marked_read' : 'webmail.marked_unread'));
                 return $this->selfUrl(['folder' => $folder]);
 
             case 'trust_sender':
@@ -303,18 +321,69 @@ final class WebmailController extends AbstractController
 
     // ── Send ──────────────────────────────────────────────────────────────────
 
+    /**
+     * The compose form's fields, as posted.
+     *
+     * @param array<string, mixed> $posted
+     * @return array{to:string,cc:string,bcc:string,reply_to:string,subject:string,body:string,in_reply_to:string,priority:string,read_receipt:bool,draft_uid:int}
+     */
+    private static function composeFields(array $posted): array
+    {
+        $priority = self::mStr($posted, 'priority', 'normal');
+        return [
+            'to'           => trim(self::mStr($posted, 'to', '')),
+            'cc'           => trim(self::mStr($posted, 'cc', '')),
+            'bcc'          => trim(self::mStr($posted, 'bcc', '')),
+            'reply_to'     => trim(self::mStr($posted, 'reply_to', '')),
+            'subject'      => trim(self::mStr($posted, 'subject', '')),
+            // Only trailing space: leading spaces can be part of the text.
+            'body'         => rtrim(self::mStr($posted, 'body', '')),
+            'in_reply_to'  => trim(self::mStr($posted, 'in_reply_to', '')),
+            'priority'     => in_array($priority, ['high', 'normal', 'low'], true) ? $priority : 'normal',
+            'read_receipt' => self::mStr($posted, 'read_receipt', '') === '1',
+            'draft_uid'    => self::mInt($posted, 'draft_uid', 0),
+        ];
+    }
+
+    /**
+     * Keep a compose form that was sent back (a missing field, a refused
+     * recipient, a server error), so the next page shows it as it was typed
+     * instead of an empty form. It is kept among the login secrets, like the
+     * IMAP password, and read once.
+     *
+     * @param array{to:string,cc:string,bcc:string,reply_to:string,subject:string,body:string,in_reply_to:string,priority:string,read_receipt:bool,draft_uid:int} $fields
+     */
+    private function stashCompose(array $fields): void
+    {
+        $this->session->storeSecret(self::COMPOSE_STASH, (string) json_encode($fields));
+    }
+
+    /** @return array<string, mixed>|null */
+    private function pullCompose(): ?array
+    {
+        $raw = $this->session->secret(self::COMPOSE_STASH);
+        if ($raw === '') { return null; }
+        $this->session->storeSecret(self::COMPOSE_STASH, '');
+        $fields = json_decode($raw, true);
+        /** @var array<string, mixed>|null */
+        return is_array($fields) ? $fields : null;
+    }
+
+    /** The name on the From line: the display name, or the username without one. */
+    private function senderName(): string
+    {
+        $name = trim($this->session->displayName());
+        return $name !== '' ? $name : $this->session->username();
+    }
+
     /** @param array<string, mixed> $posted */
     private function handleSend(array $posted, string $folder): string
     {
-        $to        = trim(self::mStr($posted, 'to', ''));
-        $cc        = trim(self::mStr($posted, 'cc', ''));
-        $bcc       = trim(self::mStr($posted, 'bcc', ''));
-        $subject   = trim(self::mStr($posted, 'subject', ''));
-        $body      = trim(self::mStr($posted, 'body', ''));
-        $inReplyTo = trim(self::mStr($posted, 'in_reply_to', ''));
+        $f = self::composeFields($posted);
 
-        if ($to === '' || $subject === '' || $body === '') {
+        if ($f['to'] === '' || $f['subject'] === '' || $f['body'] === '') {
             $this->flash->set('error', $this->t->t('webmail.compose_fields_required'));
+            $this->stashCompose($f);
             return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
         }
 
@@ -323,43 +392,73 @@ final class WebmailController extends AbstractController
         );
         $r = $this->webmail->sendMessage(
             fromAddress: $fromAddress,
-            fromName:    $this->session->username(),
-            toAddress:   $to,
-            subject:     $subject,
-            bodyText:    $body,
-            cc:          $cc,
-            bcc:         $bcc,
-            inReplyTo:   $inReplyTo,
+            fromName:    $this->senderName(),
+            toAddress:   $f['to'],
+            subject:     $f['subject'],
+            bodyText:    $f['body'],
+            cc:          $f['cc'],
+            bcc:         $f['bcc'],
+            inReplyTo:   $f['in_reply_to'],
+            priority:    $f['priority'],
+            readReceipt: $f['read_receipt'],
+            replyTo:     $f['reply_to'],
         );
         $r->drainTo($this->collector);
 
         if ($r->isOk()) {
+            // A sent draft is no longer a draft.
+            if ($f['draft_uid'] > 0) {
+                $this->webmail->discardDraft($f['draft_uid'])->drainTo($this->collector);
+            }
             $this->flash->set('success', $this->t->t('webmail.message_sent'));
             return $this->selfUrl(['folder' => $folder]);
         }
 
+        $this->stashCompose($f);
         return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
     }
 
-    /** @param array<string, mixed> $posted */
+    /**
+     * Save the form to Drafts and keep editing it. Saving again replaces the
+     * previous copy instead of piling up one draft per click.
+     *
+     * @param array<string, mixed> $posted
+     */
     private function handleSaveDraft(array $posted, string $folder): string
     {
+        $f = self::composeFields($posted);
         $fromAddress = $this->webmail->resolveLocalPart(
             $this->session->mailbox(), $this->session->username()
         );
         $r = $this->webmail->saveDraft(
             fromAddress: $fromAddress,
-            fromName:    $this->session->username(),
-            toAddress:   trim(self::mStr($posted, 'to', '')),
-            subject:     trim(self::mStr($posted, 'subject', '')),
-            bodyText:    trim(self::mStr($posted, 'body', '')),
-            cc:          trim(self::mStr($posted, 'cc', '')),
-            bcc:         trim(self::mStr($posted, 'bcc', '')),
+            fromName:    $this->senderName(),
+            toAddress:   $f['to'],
+            subject:     $f['subject'],
+            bodyText:    $f['body'],
+            cc:          $f['cc'],
+            bcc:         $f['bcc'],
+            inReplyTo:   $f['in_reply_to'],
+            priority:    $f['priority'],
+            replyTo:     $f['reply_to'],
         );
         $r->drainTo($this->collector);
-        if ($r->isOk()) {
-            $this->flash->set('success', $this->t->t('webmail.draft_saved'));
+        if (!$r->isOk()) {
+            $this->stashCompose($f);
+            return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
         }
+        if ($f['draft_uid'] > 0) {
+            $this->webmail->discardDraft($f['draft_uid'])->drainTo($this->collector);
+        }
+        $this->flash->set('success', $this->t->t('webmail.draft_saved'));
+        $newUid = $r->unwrap();
+        if ($newUid > 0) {
+            return $this->selfUrl(['draft_uid' => $newUid, 'folder' => $folder]);
+        }
+        // The server did not report the new draft's UID (no UIDPLUS): keep the
+        // form as typed; saving again adds another copy.
+        $f['draft_uid'] = 0;
+        $this->stashCompose($f);
         return $this->selfUrl(['compose' => 1, 'folder' => $folder]);
     }
 
@@ -432,16 +531,18 @@ final class WebmailController extends AbstractController
         int    $pn,
         int    $show,
         string $sort,
+        bool   $selectAll = false,
     ): void {
         $folders = $this->getFolders($folder);
-        $listR   = $this->webmail->listMessages($folder, $pn, $show);
+        $listR   = $this->webmail->listMessages($folder, $pn, $show, $sort === 'oldest');
         $listR->drainTo($this->collector);
         $list = $listR->isOk() ? $listR->unwrap()
             : ['messages' => [], 'total' => 0, 'pages' => 1, 'page' => 1, 'per_page' => 25];
 
-        if ($sort === 'oldest') {
-            $list['messages'] = array_reverse($list['messages']);
-        }
+        // In Sent and Drafts the other party is the recipient: the sender is
+        // always you.
+        $type     = $this->specialType($folders, $folder);
+        $outgoing = in_array($type, ['sent', 'drafts'], true);
 
         $csrfToken = $this->csrf->generate(self::FORM);
         $prgId     = $this->prg->createId($selfUrl);
@@ -457,6 +558,10 @@ final class WebmailController extends AbstractController
                                     'sort' => $sort !== 'newest' ? $sort : null]);
         $prevUrl = $this->selfUrl(array_merge($baseParams, ['pn' => $list['page'] - 1]));
         $nextUrl = $this->selfUrl(array_merge($baseParams, ['pn' => $list['page'] + 1]));
+        // Select all without JavaScript: the page again, with every box ticked.
+        $pageParams = array_merge($baseParams, $list['page'] > 1 ? ['pn' => $list['page']] : []);
+        $selectAllUrl  = $this->selfUrl(array_merge($pageParams, ['select' => 'all']));
+        $selectNoneUrl = $this->selfUrl($pageParams);
 
         // Move-to options for bulk bar
         $moveOptions = [];
@@ -481,8 +586,16 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_view_headers',   false);
         $this->ctx->set('folders',                $folders);
         $this->ctx->set('current_folder',         $folder);
-        $this->ctx->set('mail_list',              $this->decorateMessages($list['messages'], $folder));
+        $this->ctx->set('mail_list',              $this->decorateMessages($list['messages'], $folder, $outgoing, $selectAll, $type === 'drafts'));
         $this->ctx->set('has_mail_list',          $list['messages'] !== []);
+        $this->ctx->set('label_party',            $this->t->t($outgoing ? 'webmail.to' : 'webmail.from'));
+        $this->ctx->set('all_selected',           $selectAll);
+        $this->ctx->set('select_all_url',         $selectAllUrl);
+        $this->ctx->set('select_none_url',        $selectNoneUrl);
+        $this->ctx->set('label_select_none',      $this->t->t('webmail.select_none'));
+        $this->ctx->set('label_range',            $this->t->t('webmail.range', [
+            'from' => (string) $msgFrom, 'to' => (string) $msgTo, 'total' => (string) $list['total'],
+        ]));
         $this->ctx->set('msg_total',              $list['total']);
         $this->ctx->set('msg_pages',              $list['pages']);
         $this->ctx->set('msg_page',               $list['page']);
@@ -492,7 +605,6 @@ final class WebmailController extends AbstractController
         $this->ctx->set('has_next',               $list['page'] < $list['pages']);
         $this->ctx->set('prev_url',               $prevUrl);
         $this->ctx->set('next_url',               $nextUrl);
-        $this->ctx->set('compose_url',            $this->selfUrl(['compose' => 1, 'folder' => $folder]));
         $this->ctx->set('move_options',           $moveOptions);
         $this->ctx->set('sort_newest',            $sort !== 'oldest');
         $this->ctx->set('sort_oldest',            $sort === 'oldest');
@@ -502,7 +614,7 @@ final class WebmailController extends AbstractController
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
         $this->ctx->set('base_url',               $selfUrl);
-        $this->setI18n();
+        $this->setShared($folder);
     }
 
     private function buildMessageContext(
@@ -559,7 +671,12 @@ final class WebmailController extends AbstractController
 
         $backUrl     = $this->selfUrl(['folder' => $folder, 'pn' => $pn]);
         $headersUrl  = $this->selfUrl(['folder' => $folder, 'uid' => $uid, 'headers' => 1, 'pn' => $pn]);
-        $replyUrl    = $this->selfUrl(['compose' => 1, 'reply_uid' => $uid, 'folder' => $folder]);
+        $replyUrl    = $this->selfUrl(['reply_uid' => $uid, 'folder' => $folder]);
+        $forwardUrl  = $this->selfUrl(['forward_uid' => $uid, 'folder' => $folder]);
+        $isDraft     = $this->specialType($folders, $folder) === 'drafts';
+        // The plain-text part is shown when there is one, and then the HTML
+        // part (and its images) is not shown at all.
+        $htmlShown   = $hasHtml && !(is_string($message['body_text'] ?? null) && $message['body_text'] !== '');
 
         $this->ctx->set('webmail_view',          'message');
         $this->ctx->set('webmail_view_login',     false);
@@ -573,9 +690,9 @@ final class WebmailController extends AbstractController
         $this->ctx->set('message_found',          $message !== null);
         $this->ctx->set('body_html_safe',         $safeHtml);
         $this->ctx->set('has_html_body',          $hasHtml);
-        $this->ctx->set('images_blocked',         $hasHtml && !$senderTrusted);
+        $this->ctx->set('images_blocked',         $htmlShown && !$senderTrusted);
         $this->ctx->set('sender_email',           $senderEmail);
-        $this->ctx->set('sender_trusted',         $senderTrusted);
+        $this->ctx->set('sender_trusted',         $htmlShown && $senderTrusted);
         $this->ctx->set('attachments',            $attachments);
         $this->ctx->set('has_attachments',        $attachments !== []);
         $this->ctx->set('move_options',           $moveOptions);
@@ -585,10 +702,13 @@ final class WebmailController extends AbstractController
         $this->ctx->set('back_url',               $backUrl);
         $this->ctx->set('headers_url',            $headersUrl);
         $this->ctx->set('reply_url',              $replyUrl);
+        $this->ctx->set('forward_url',            $forwardUrl);
+        $this->ctx->set('is_draft',               $isDraft);
+        $this->ctx->set('edit_draft_url',         $this->selfUrl(['draft_uid' => $uid, 'folder' => $folder]));
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
         $this->ctx->set('base_url',               $selfUrl);
-        $this->setI18n();
+        $this->setShared($folder);
     }
 
     private function buildRawHeadersContext(
@@ -621,34 +741,75 @@ final class WebmailController extends AbstractController
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
         $this->ctx->set('base_url',               $selfUrl);
-        $this->setI18n();
+        $this->setShared($folder);
     }
 
-    private function buildComposeContext(string $selfUrl, string $folder, int $replyUid): void
+    private function buildComposeContext(string $selfUrl, string $folder, int $replyUid, int $fwdUid = 0, int $draftUid = 0): void
     {
         $folders   = $this->getFolders($folder);
         $csrfToken = $this->csrf->generate(self::FORM);
         $prgId     = $this->prg->createId($selfUrl);
 
-        $composeTo      = '';
-        $composeSubject = '';
-        $composeBody    = '';
-        $inReplyTo      = '';
+        $f = [
+            'to' => '', 'cc' => '', 'bcc' => '', 'reply_to' => '', 'subject' => '', 'body' => '',
+            'in_reply_to' => '', 'priority' => 'normal', 'read_receipt' => false, 'draft_uid' => 0,
+        ];
+        $note = '';
 
-        if ($replyUid > 0) {
-            $msgR = $this->webmail->getMessage($folder, $replyUid);
+        $stash = $this->pullCompose();
+        if ($stash !== null) {
+            // The form as it was sent back.
+            foreach ($f as $key => $default) {
+                $v = $stash[$key] ?? $default;
+                $f[$key] = is_bool($default) ? (bool) $v : (is_int($default) ? (is_numeric($v) ? (int) $v : 0) : (is_scalar($v) ? (string) $v : ''));
+            }
+        } elseif ($draftUid > 0) {
+            $msgR = $this->webmail->getMessage($this->webmail->draftsFolder(), $draftUid);
+            $msgR->drainTo($this->collector);
             if ($msgR->isOk()) {
                 /** @var array<string,mixed> $msg */
-                $msg            = $msgR->unwrap();
-                $composeTo      = (is_scalar($msg['from'] ?? null) ? (string)$msg['from'] : '');
-                $subjectRaw = (is_scalar($msg['subject'] ?? null) ? (string)$msg['subject'] : '');
-                $composeSubject = 'Re: ' . (preg_replace('/^Re:\s*/i', '', $subjectRaw) ?? $subjectRaw);
-                $inReplyTo      = $msg['message_id'] ?? '';
-                $origBody       = (is_scalar($msg['body_text'] ?? null) ? (string)$msg['body_text'] : '');
-                $origDate       = (is_scalar($msg['date'] ?? null) ? (string)$msg['date'] : '');
-                if ($origBody !== '') {
-                    $composeBody = "\n\nOn {$origDate}, {$composeTo} wrote:\n"
-                                   . implode("\n", array_map(fn($l) => '> ' . $l, explode("\n", $origBody)));
+                $msg = $msgR->unwrap();
+                $f['to']          = self::field($msg, 'to');
+                $f['cc']          = self::field($msg, 'cc');
+                $f['bcc']         = self::field($msg, 'bcc');
+                $f['reply_to']    = self::field($msg, 'reply_to');
+                $f['subject']     = self::field($msg, 'subject') === '(no subject)' ? '' : self::field($msg, 'subject');
+                $f['body']        = rtrim(self::field($msg, 'body_text'));
+                $f['draft_uid']   = $draftUid;
+            }
+        } elseif ($replyUid > 0 || $fwdUid > 0) {
+            $msgR = $this->webmail->getMessage($folder, $replyUid > 0 ? $replyUid : $fwdUid);
+            $msgR->drainTo($this->collector);
+            if ($msgR->isOk()) {
+                /** @var array<string,mixed> $msg */
+                $msg     = $msgR->unwrap();
+                $from    = self::field($msg, 'from');
+                $subject = self::field($msg, 'subject');
+                $date    = self::field($msg, 'date');
+                $body    = rtrim(self::field($msg, 'body_text'));
+                if ($replyUid > 0) {
+                    // Reply to where the sender asked (Reply-To), and from your
+                    // own sent mail, to the people you wrote to.
+                    $outgoing = in_array($this->specialType($folders, $folder), ['sent', 'drafts'], true);
+                    $f['to'] = $outgoing ? self::field($msg, 'to')
+                        : (self::field($msg, 'reply_to') !== '' ? self::field($msg, 'reply_to') : $from);
+                    $f['subject']     = 'Re: ' . (preg_replace('/^(?:\s*re\s*:\s*)+/i', '', $subject) ?? $subject);
+                    $f['in_reply_to'] = self::field($msg, 'message_id');
+                    if ($body !== '') {
+                        $f['body'] = "\n\n" . $this->t->t('webmail.reply_quote', ['date' => $date, 'sender' => $from]) . "\n"
+                            . implode("\n", array_map(static fn (string $l): string => '> ' . $l, explode("\n", $body)));
+                    }
+                } else {
+                    $f['subject'] = 'Fwd: ' . (preg_replace('/^(?:\s*fwd?\s*:\s*)+/i', '', $subject) ?? $subject);
+                    $f['body'] = "\n\n" . $this->t->t('webmail.forward_separator') . "\n"
+                        . $this->t->t('webmail.from') . ': ' . $from . "\n"
+                        . $this->t->t('webmail.date') . ': ' . $date . "\n"
+                        . $this->t->t('webmail.subject') . ': ' . $subject . "\n"
+                        . $this->t->t('webmail.to') . ': ' . self::field($msg, 'to') . "\n\n"
+                        . $body;
+                    if (is_array($msg['attachments'] ?? null) && $msg['attachments'] !== []) {
+                        $note = $this->t->t('webmail.forward_no_attachments');
+                    }
                 }
             }
         }
@@ -661,20 +822,35 @@ final class WebmailController extends AbstractController
         $this->ctx->set('webmail_view_headers',   false);
         $this->ctx->set('folders',                $folders);
         $this->ctx->set('current_folder',         $folder);
-        $this->ctx->set('compose_to',             $composeTo);
-        $this->ctx->set('compose_cc',             '');
-        $this->ctx->set('compose_bcc',            '');
-        $this->ctx->set('compose_subject',        $composeSubject);
-        $this->ctx->set('compose_body',           $composeBody);
-        $this->ctx->set('compose_in_reply_to',    $inReplyTo);
+        $this->ctx->set('compose_to',             $f['to']);
+        $this->ctx->set('compose_cc',             $f['cc']);
+        $this->ctx->set('compose_bcc',            $f['bcc']);
+        $this->ctx->set('compose_reply_to',       $f['reply_to']);
+        $this->ctx->set('compose_subject',        $f['subject']);
+        $this->ctx->set('compose_body',           $f['body']);
+        $this->ctx->set('compose_in_reply_to',    $f['in_reply_to']);
+        $this->ctx->set('compose_draft_uid',      $f['draft_uid']);
+        $this->ctx->set('priority_high',          $f['priority'] === 'high');
+        $this->ctx->set('priority_normal',        $f['priority'] === 'normal');
+        $this->ctx->set('priority_low',           $f['priority'] === 'low');
+        $this->ctx->set('compose_read_receipt',   $f['read_receipt']);
+        $this->ctx->set('compose_note',           $note);
+        $this->ctx->set('has_compose_note',       $note !== '');
         // The address the message will be sent from, exactly as sendMessage() builds it.
         $localPart = $this->webmail->resolveLocalPart($this->session->mailbox(), $this->session->username());
-        $this->ctx->set('user_mailbox',           $this->session->username() . ' <' . (str_contains($localPart, '@') ? $localPart : $localPart . '@' . $this->webmail->mailDomain()) . '>');
+        $this->ctx->set('user_mailbox',           $this->senderName() . ' <' . (str_contains($localPart, '@') ? $localPart : $localPart . '@' . $this->webmail->mailDomain()) . '>');
         $this->ctx->set('back_url',               $this->selfUrl(['folder' => $folder]));
         $this->ctx->set('csrf_token',             $csrfToken);
         $this->ctx->set('prg_id',                 $prgId);
         $this->ctx->set('base_url',               $selfUrl);
-        $this->setI18n();
+        $this->setShared($folder);
+    }
+
+    /** @param array<string,mixed> $msg */
+    private static function field(array $msg, string $key): string
+    {
+        $v = $msg[$key] ?? '';
+        return is_scalar($v) ? (string) $v : '';
     }
 
     // =========================================================================
@@ -696,6 +872,7 @@ final class WebmailController extends AbstractController
         $r = $this->webmail->getFolders();
         if (!$r->isOk()) { return []; }
         return array_map(function ($f) use ($currentFolder) {
+            $f['display']    = $this->folderLabel($f['name'], $f['display'], $f['special_type']);
             $f['url']        = $this->selfUrl(['folder' => $f['name']]);
             $f['is_current'] = $f['name'] === $currentFolder;
             $f['has_unseen'] = $f['unseen'] > 0;
@@ -708,20 +885,52 @@ final class WebmailController extends AbstractController
     {
         $r = $this->webmail->getFolders();
         return $r->isOk()
-            ? array_map(fn($f) => ['name' => $f['name'], 'display' => $f['display']], $r->unwrap())
+            ? array_map(fn($f) => ['name' => $f['name'], 'display' => $this->folderLabel($f['name'], $f['display'], $f['special_type'])], $r->unwrap())
             : [];
     }
 
+    /** The folder's name in the page's language when it is a standard one. */
+    private function folderLabel(string $name, string $display, string $specialType): string
+    {
+        $key = $name === self::INBOX ? 'webmail.inbox' : ($specialType !== '' ? 'webmail.folder.' . $specialType : '');
+        return $key !== '' ? $this->t->t($key, fallback: $display) : $display;
+    }
+
     /**
-     * @param list<array{uid:int,flags:list<string>,subject:string,from_display:string,date_str:string,date_ts:int,seen:bool}> $messages
+     * 'sent', 'drafts', 'trash', 'inbox' or '' for the folder.
+     *
+     * @param list<array<string, mixed>> $folders
+     */
+    private function specialType(array $folders, string $folder): string
+    {
+        foreach ($folders as $f) {
+            if (($f['name'] ?? null) === $folder) {
+                return is_string($f['special_type'] ?? null) ? $f['special_type'] : '';
+            }
+        }
+        return match ($folder) {
+            $this->webmail->sentFolder()   => 'sent',
+            $this->webmail->draftsFolder() => 'drafts',
+            default                        => '',
+        };
+    }
+
+    /**
+     * @param list<array{uid:int,flags:list<string>,subject:string,from_display:string,to_display:string,date_str:string,date_ts:int,seen:bool}> $messages
      * @return list<array<string,mixed>>
      */
-    private function decorateMessages(array $messages, string $folder): array
+    private function decorateMessages(array $messages, string $folder, bool $outgoing = false, bool $checked = false, bool $drafts = false): array
     {
         $even = false;
-        return array_map(function ($m) use ($folder, &$even) {
-            $m['view_url']  = $this->selfUrl(['folder' => $folder, 'uid' => $m['uid']]);
-            $m['date_fmt']  = $m['date_ts'] > 0 ? date('d M Y H:i', $m['date_ts']) : $m['date_str'];
+        return array_map(function ($m) use ($folder, $outgoing, $checked, $drafts, &$even) {
+            // A draft opens in the editor, like in any mail client.
+            $m['view_url']  = $this->selfUrl($drafts ? ['draft_uid' => $m['uid'], 'folder' => $folder]
+                                                     : ['folder' => $folder, 'uid' => $m['uid']]);
+            $m['party']     = $outgoing ? $m['to_display'] : $m['from_display'];
+            $m['checked']   = $checked;
+            // The site's times are UTC; say so, since the message itself shows
+            // the sender's own offset.
+            $m['date_fmt']  = $m['date_ts'] > 0 ? date('d M Y H:i', $m['date_ts']) . ' UTC' : $m['date_str'];
             $m['unread']    = !$m['seen'];
             $m['row_even']  = $even;
             $even           = !$even;
@@ -741,6 +950,13 @@ final class WebmailController extends AbstractController
         if ($bytes < 1024)    { return $bytes . ' B'; }
         if ($bytes < 1048576) { return round($bytes / 1024, 1) . ' KB'; }
         return round($bytes / 1048576, 1) . ' MB';
+    }
+
+    /** What every signed-in view shows: the labels, and the sidebar's Compose link. */
+    private function setShared(string $folder): void
+    {
+        $this->ctx->set('compose_url', $this->selfUrl(['compose' => 1, 'folder' => $folder]));
+        $this->setI18n();
     }
 
     private function setI18n(): void
@@ -809,6 +1025,11 @@ final class WebmailController extends AbstractController
             'label_untrust_sender'           => 'webmail.untrust_sender',
             'label_sender_trusted'           => 'webmail.sender_trusted_notice',
             'label_select_all'               => 'webmail.select_all',
+            'label_cc'                       => 'webmail.compose.cc',
+            'label_reply_to'                 => 'webmail.compose.reply_to',
+            'label_optional'                 => 'webmail.compose.optional',
+            'label_message_not_found'        => 'webmail.message_not_found',
+            'btn_edit_draft'                 => 'webmail.btn_edit_draft',
             'label_go'                       => 'webmail.go',
         ];
         foreach ($map as $ctxKey => $langKey) {
