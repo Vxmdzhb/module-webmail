@@ -91,8 +91,13 @@
             <table id="wm-list">
                 <thead>
                 <tr>
-                    {{! Select all is a link: the site runs without JavaScript. }}
-                    <th style="width:1.5em">{{^all_selected}}<a href="{{select_all_url}}" title="{{label_select_all}}" aria-label="{{label_select_all}}">&#x2610;</a>{{/all_selected}}{{#all_selected}}<a href="{{select_none_url}}" title="{{label_select_none}}" aria-label="{{label_select_none}}">&#x2611;</a>{{/all_selected}}</th>
+                    {{! Select all without JavaScript: a checkbox like the ones below, }}
+                    {{! with a link laid over it that reloads the page all ticked (or none). }}
+                    <th style="width:1.5em;position:relative">
+                        <input type="checkbox" tabindex="-1" aria-hidden="true"{{#all_selected}} checked{{/all_selected}}>
+                        {{^all_selected}}<a href="{{select_all_url}}" title="{{label_select_all}}" aria-label="{{label_select_all}}" style="position:absolute;inset:0"></a>{{/all_selected}}
+                        {{#all_selected}}<a href="{{select_none_url}}" title="{{label_select_none}}" aria-label="{{label_select_none}}" style="position:absolute;inset:0"></a>{{/all_selected}}
+                    </th>
                     <th>{{label_party}}</th>
                     <th>{{label_subject}}</th>
                     <th>{{label_date}}</th>
